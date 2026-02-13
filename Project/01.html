@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geo-Analyst: 10 Missions</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        body { font-family: 'Sarabun', sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; background: #2c3e50; overflow: hidden; }
+        
+        /* Header */
+        header { 
+            background: #2c3e50; color: white; padding: 12px 20px; 
+            display: flex; justify-content: space-between; align-items: center; 
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3); z-index: 1000;
+        }
+        .score-board { font-size: 1.1rem; background: #e67e22; padding: 5px 15px; border-radius: 20px; font-weight: bold; }
+        
+        /* Map Container */
+        .container { flex-grow: 1; position: relative; }
+        #map { width: 100%; height: 100%; background: #aad3df; }
+
+        /* Map Controls (ขวาบน) */
+        .map-controls {
+            position: absolute; top: 20px; right: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 10px; border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            z-index: 900; display: flex; flex-direction: column; gap: 8px; width: 150px;
+        }
+        .map-btn {
+            border: 1px solid #ddd; background: white; padding: 8px;
+            border-radius: 5px; cursor: pointer; text-align: left; font-size: 0.85rem;
+            transition: 0.2s; display: flex; align-items: center; gap: 8px;
+        }
+        .map-btn:hover { background: #f0f2f5; }
+        .map-btn.active { background: #3498db; color: white; border-color: #3498db; }
+
+        /* Mission Panel (ล่างซ้าย) */
+        .mission-panel {
+            position: absolute; bottom: 30px; left: 20px;
+            width: 340px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px; border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            z-index: 900; border-left: 6px solid #e74c3c;
+        }
+        .m-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
+        .m-title { font-size: 1.1rem; font-weight: bold; color: #c0392b; }
+        .m-desc { font-size: 0.95rem; color: #333; margin-bottom: 10px; line-height: 1.5; }
+        .current-score { font-size: 0.8rem; color: #27ae60; font-weight: bold; }
+        
+        /* Hints */
+        .hints { background: #ecf0f1; padding: 10px; border-radius: 6px; font-size: 0.85rem; margin-bottom: 15px; }
+        .hint-item { margin-bottom: 4px; display: flex; align-items: center; gap: 5px; }
+        
+        button.next-btn {
+            background: #27ae60; color: white; border: none; padding: 12px; width: 100%;
+            border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 1rem;
+            display: none; transition: 0.2s;
+        }
+        button.next-btn:hover { background: #2ecc71; }
+
+    </style>
+</head>
+<body>
+
+<header>
+    <div style="font-weight:bold; font-size:1.1rem;"><i class="fas fa-globe-asia"></i> Geo-Analyst: Thailand Elite</div>
+    <div class="score-board">คะแนนรวม: <span id="total-score">0</span></div>
+</header>
+
+<div class="container">
+    <div id="map"></div>
+
+    <div class="map-controls">
+        <button class="map-btn active" onclick="switchMap('street', this)">
+            <i class="fas fa-road"></i> ถนน (ปกติ)
+        </button>
+        <button class="map-btn" onclick="switchMap('topo', this)">
+            <i class="fas fa-mountain"></i> ภูมิประเทศ (สูงต่ำ)
+        </button>
+        <button class="map-btn" onclick="switchMap('sat', this)">
+            <i class="fas fa-satellite"></i> ดาวเทียม (จริง)
+        </button>
+    </div>
+
+    <div class="mission-panel">
+        <div class="m-header">
+            <div class="m-title" id="m-title">Loading...</div>
+            <div class="current-score">ด่านนี้: <span id="level-score">100</span> pt</div>
+        </div>
+        <div class="m-desc" id="m-desc">...</div>
+        
+        <div class="hints">
+            <div style="font-weight:bold; margin-bottom:5px;">คำใบ้ภารกิจ:</div>
+            <div id="hint-list"></div>
+        </div>
+
+        <button class="next-btn" id="btn-next" onclick="nextLevel()">ไปด่านต่อไป ▶</button>
+    </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    // --- 1. Map Setup (Locked to Thailand) ---
+    const thailandBounds = L.latLngBounds(L.latLng(5.0, 97.0), L.latLng(21.0, 106.0));
+    const map = L.map('map', {
+        center: [13.0, 101.5], zoom: 6, minZoom: 5,
+        maxBounds: thailandBounds, maxBoundsViscosity: 1.0
+    });
+
+    const layers = {
+        street: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: 'OSM' }),
+        topo: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, attribution: 'OpenTopoMap' }),
+        sat: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { attribution: 'Esri' })
+    };
+    let currentLayer = layers.street;
+    currentLayer.addTo(map);
+
+    // --- 2. Game Variables ---
+    let totalScore = 0;
+    let currentLevelScore = 100; // คะแนนเต็มต่อด่าน
+    let currentLevelIdx = 0;
+    let isLevelDone = false;
+
+    // --- 3. The 10 Missions ---
+    const levels = [
+        {
+            title: "1. เมืองเก่าอยุธยา",
+            desc: "วอร์มเครื่อง! จงหาตำแหน่งของ <b>'จ.พระนครศรีอยุธยา'</b> (เหนือ กทม. เล็กน้อย)",
+            hints: ["ใช้ 'แผนที่ถนน' จะหาง่ายที่สุด"],
+            target: [14.3532, 100.5684], radius: 35000, zoom: 7, center: [14.0, 100.5]
+        },
+        {
+            title: "2. หนีน้ำท่วม (น่าน)",
+            desc: "ดูแผนที่ความสูง! พื้นที่สีเขียวคือน้ำท่วม จงจิ้ม <b>'ภูเขา (สีน้ำตาล)'</b> ฝั่งซ้ายหรือขวาของเมือง",
+            hints: ["เปลี่ยนเป็น 'แผนที่ภูมิประเทศ' (Topo)", "จิ้มส่วนที่เป็นสีน้ำตาลเข้ม"],
+            checkType: "topo_nan", zoom: 10, center: [18.78, 100.78]
+        },
+        {
+            title: "3. ปอดกรุงเทพฯ (บางกะเจ้า)",
+            desc: "จงหาพื้นที่สีเขียวรูป <b>'กระเพาะหมู'</b> ที่ถูกล้อมด้วยแม่น้ำเจ้าพระยา (สมุทรปราการ)",
+            hints: ["อยู่ทิศใต้ของกรุงเทพฯ", "มองหาพื้นที่ป่าสีเขียวขนาดใหญ่"],
+            target: [13.695, 100.560], radius: 4000, zoom: 11, center: [13.70, 100.55]
+        },
+        {
+            title: "4. ถ้ำหลวง (เชียงราย)",
+            desc: "ภารกิจกู้ภัย! จงหา <b>'เทือกเขาดอยนางนอน'</b> (ที่ตั้งถ้ำหลวง) เหนือ อ.แม่สาย",
+            hints: ["ไปที่เหนือสุดของประเทศ (เชียงราย)", "ดูแผนที่ Topo หาภูเขาสูงริมชายแดน"],
+            target: [20.3800, 99.8600], radius: 5000, zoom: 12, center: [20.40, 99.88]
+        },
+        {
+            title: "5. ท่าเรือแหลมฉบัง (ชลบุรี)",
+            desc: "ศูนย์กลางขนส่งทางทะเล! จงหาท่าเรือน้ำลึกที่มี <b>'ตู้คอนเทนเนอร์'</b> ยื่นลงไปในทะเล",
+            hints: ["เปลี่ยนเป็น 'ภาพดาวเทียม'", "อยู่ชายฝั่งชลบุรี (ใกล้พัทยา)"],
+            target: [13.085, 100.880], radius: 4000, zoom: 11, center: [13.10, 100.90]
+        },
+        {
+            title: "6. ทะเลสาบสงขลา",
+            desc: "จงหา <b>'ทะเลสาบที่ใหญ่ที่สุด'</b> ในประเทศไทย (ภาคใต้)",
+            hints: ["มองหาแหล่งน้ำขนาดใหญ่ใกล้หาดใหญ่", "ซูมดูแผนที่ถนนจะเห็นชื่อชัดเจน"],
+            target: [7.450, 100.300], radius: 20000, zoom: 9, center: [7.20, 100.40]
+        },
+        {
+            title: "7. ภูทับเบิก (เพชรบูรณ์)",
+            desc: "หาจุดชมวิวทะเลหมอก! จงหา <b>'ยอดเขาสูง'</b> ที่มีถนนคดเคี้ยว ใน จ.เพชรบูรณ์",
+            hints: ["ใช้แผนที่ Topo หาจุดสีน้ำตาลเข้ม", "อยู่รอยต่อระหว่างหล่มเก่า-ด่านซ้าย"],
+            target: [16.900, 101.100], radius: 6000, zoom: 11, center: [16.85, 101.15]
+        },
+        {
+            title: "8. เกาะสมุย (สุราษฎร์ธานี)",
+            desc: "จงหา <b>'เกาะท่องเที่ยวขนาดใหญ่'</b> ในอ่าวไทย",
+            hints: ["อยู่ทางขวาของสุราษฎร์ธานี", "เป็นเกาะใหญ่ที่มีสนามบิน"],
+            target: [9.500, 100.000], radius: 10000, zoom: 9, center: [9.30, 99.80]
+        },
+        {
+            title: "9. เขื่อนภูมิพล (ตาก)",
+            desc: "จงหา <b>'เขื่อนคอนกรีตโค้ง'</b> ขนาดใหญ่กั้นแม่น้ำปิง",
+            hints: ["ใช้ภาพดาวเทียมจะเห็นสันเขื่อนชัด", "อยู่ทางเหนือของ จ.ตาก"],
+            target: [17.243, 98.973], radius: 3000, zoom: 12, center: [17.20, 99.00]
+        },
+        {
+            title: "10. พระปฐมเจดีย์ (นครปฐม)",
+            desc: "ด่านสุดท้าย! จงหา <b>'เจดีย์สีทองที่ใหญ่ที่สุด'</b> ใจกลางเมืองนครปฐม",
+            hints: ["ดูจากภาพดาวเทียมจะเห็นองค์เจดีย์กลมใหญ่", "อยู่ทางตะวันตกของ กทม."],
+            target: [13.819, 100.060], radius: 1000, zoom: 14, center: [13.82, 100.06]
+        }
+    ];
+
+    // --- 4. Game Functions ---
+
+    function switchMap(type, btn) {
+        map.removeLayer(currentLayer);
+        currentLayer = layers[type];
+        currentLayer.addTo(map);
+        document.querySelectorAll('.map-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+    }
+
+    function loadLevel(idx) {
+        isLevelDone = false;
+        currentLevelScore = 100; // รีเซ็ตคะแนนด่าน
+        document.getElementById('level-score').innerText = currentLevelScore;
+        document.getElementById('level-score').style.color = "#27ae60";
+
+        const lvl = levels[idx];
+        document.getElementById('m-title').innerText = `${lvl.title} (${idx+1}/10)`;
+        document.getElementById('m-desc').innerHTML = lvl.desc;
+        document.getElementById('btn-next').style.display = 'none';
+        
+        const list = document.getElementById('hint-list');
+        list.innerHTML = "";
+        lvl.hints.forEach(h => { list.innerHTML += `<div class="hint-item"><i class="fas fa-search" style="color:#e67e22;"></i> ${h}</div>`; });
+
+        map.flyTo(lvl.center, lvl.zoom, { duration: 1.5 });
+    }
+
+    map.on('click', function(e) {
+        if(isLevelDone) return;
+        const lvl = levels[currentLevelIdx];
+        let isCorrect = false;
+
+        // Logic ด่านน่าน (เช็ค Longitude หุบเขา)
+        if (lvl.checkType === "topo_nan") {
+            const lng = e.latlng.lng;
+            if (lng < 100.745 || lng > 100.815) isCorrect = true;
+            else {
+                // ผิดด่านน่าน
+                L.rectangle([[18.6, 100.745], [19.0, 100.815]], {color: 'red', fillOpacity: 0.1, weight:1}).addTo(map);
+            }
+        } 
+        // Logic ด่านทั่วไป (วัดระยะ)
+        else {
+            const dist = map.distance(e.latlng, lvl.target);
+            if (dist <= lvl.radius) isCorrect = true;
+        }
+
+        if (isCorrect) {
+            // ถูกต้อง
+            isLevelDone = true;
+            totalScore += currentLevelScore;
+            document.getElementById('total-score').innerText = totalScore;
+            
+            L.popup().setLatLng(e.latlng).setContent("✅ <b>ถูกต้อง! ภารกิจสำเร็จ</b>").openOn(map);
+            if(lvl.target) L.circle(lvl.target, {color:'green', radius: lvl.radius}).addTo(map);
+            
+            const btn = document.getElementById('btn-next');
+            btn.style.display = 'block';
+            
+            if(currentLevelIdx === levels.length -1) {
+                btn.innerText = "🏆 สรุปผลคะแนน";
+                btn.onclick = showFinalScore;
+            }
+        } else {
+            // ผิด
+            if (currentLevelScore > 0) currentLevelScore -= 10; // หักคะแนน
+            document.getElementById('level-score').innerText = currentLevelScore;
+            document.getElementById('level-score').style.color = "#c0392b";
+            
+            L.popup().setLatLng(e.latlng).setContent("❌ <b>ยังไม่ถูก! (หัก 10 คะแนน)</b><br>ลองเปลี่ยนแผนที่ หรืออ่านคำใบ้ดูนะ").openOn(map);
+        }
+    });
+
+    function nextLevel() {
+        if (currentLevelIdx < levels.length - 1) {
+            currentLevelIdx++;
+            loadLevel(currentLevelIdx);
+        }
+    }
+
+    function showFinalScore() {
+        let rank = "นักสำรวจมือใหม่";
+        if(totalScore >= 900) rank = "🗺️ ปรมาจารย์แผนที่ (Map Master)";
+        else if(totalScore >= 700) rank = "🧐 ผู้เชี่ยวชาญ (Expert)";
+        else if(totalScore >= 500) rank = "👮 เจ้าหน้าที่ภาคสนาม (Officer)";
+
+        alert(`จบเกม! คะแนนรวม: ${totalScore}/1000\nระดับของคุณคือ: ${rank}`);
+        location.reload();
+    }
+
+    // เริ่มเกม
+    loadLevel(0);
+
+</script>
+</body>
+</html>
